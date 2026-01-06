@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<menu>
+  <item>
+    <path>civicrm/square/token</path>
+    <page_callback>CRM_UschessSquare_Ajax_SquareToken::run</page_callback>
+    <access_arguments>access CiviContribute</access_arguments>
+    <is_public>0</is_public>
+  </item>
+</menu>
