@@ -12,7 +12,7 @@ class CRM_UschessSquare_Page_Tokens extends CRM_Core_Page {
   protected $contactId;
 
   public function run() {
-    $this->contactId = CRM_Utils_Request::retrieve('cid', 'Positive', $this);
+    $this->contactId = CRM_Utils_Request::retrieve('contact_id', 'Positive', $this);
     if (!$this->contactId) {
       CRM_Core_Error::fatal('Missing contact ID.');
     }

@@ -165,57 +165,6 @@ function square_civicrm_enable(): void {
 }
 
 /**
- * Implements hook_civicrm_buildForm().
- * Inject Square Web Payments SDK & card container into contribution pages.
- */
-function square_civicrm_buildForm($formName, &$form): void {
-
-  // We only care about contribution forms.
-  if ($formName !== 'CRM_Contribute_Form_Contribution' &&
-      $formName !== 'CRM_Contribute_Form_Contribution_Main') {
-    return;
-  }
-
-  // Get the payment processor currently active for the form.
-  $pp = $form->getVar('_paymentProcessor');
-  if (empty($pp) || empty($pp['class_name'])) {
-    return;
-  }
-
-  // Sanity: Only inject when *Square* is selected.
-  if ($pp['class_name'] !== 'Payment_Square') {
-    return;
-  }
-
-  // Get processor configuration.
-  $locationId = $pp['signature'] ?? '';
-  $applicationId = $pp['user_name'] ?? '';
-
-  if (!$applicationId || !$locationId) {
-    CRM_Core_Error::debug_log_message("Square: Missing Application ID or Location ID in processor settings.");
-    return;
-  }
-
-  // Assign variables to Smarty so template can use them.
-  $form->assign('squareApplicationId', $applicationId);
-  $form->assign('squareLocationId', $locationId);
-  $form->assign('squareCardContainer', TRUE);
-
-  // Attach our JS + template.
-  CRM_Core_Resources::singleton()
-    ->addScriptUrl('https://sandbox.web.squarecdn.com/v1/square.js') // or production swapped via config
-    ->addScriptFile('org.uschess.square', 'js/square-card.js', 10);
-
-  // Tell CiviCRM to include our card.tpl in the billing block.
-  $template = CRM_Core_Smarty::singleton();
-  $template->assign('squareInject', TRUE);
-  CRM_Core_Region::instance('billing-block-pre')->add([
-    'template' => 'CRM/Square/Card.tpl',
-  ]);
-
-}
-
-/**
  * Implements hook_civicrm_post().
  * Used for storing Square tokens, subscription mapping, etc.
  */

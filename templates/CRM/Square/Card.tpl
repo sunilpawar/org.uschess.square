@@ -1,6 +1,6 @@
 {if $squareInject}
   <div id="square-card-container"></div>
-  <input type="hidden" name="square_payment_token" id="square_payment_token" />
+   {$form.square_payment_token.html}
 
   <script>
     window.squareApplicationId = "{$squareApplicationId|escape}";

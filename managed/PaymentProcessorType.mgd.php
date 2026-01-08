@@ -29,15 +29,15 @@ return [
       // Base URLs – we mostly use the SDK, but Civi still likes these sane defaults
       // LIVE
       'url_site_default' => 'https://connect.squareup.com',
-      'url_api_default'  => 'https://connect.squareup.com/v2',
+      'url_api_default'  => 'https://connect.squareup.com',
 
       // TEST (sandbox)
       'url_site_test_default' => 'https://connect.squareupsandbox.com',
-      'url_api_test_default'  => 'https://connect.squareupsandbox.com/v2',
+      'url_api_test_default'  => 'https://connect.squareupsandbox.com',
 
       // On-site card entry (we use Web Payments SDK)
       // 1 = onsite, 4 = offsite/redirect
-      'billing_mode' => 1,
+      'billing_mode' => 4,
 
       // 1 = credit card
       'payment_type' => 1,
