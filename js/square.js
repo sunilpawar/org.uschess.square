@@ -1,24 +1,65 @@
 (function ($, CRM) {
-  $(function () {
-    if (!CRM || !CRM.vars || !CRM.vars.orgUschessSquare) {
-      return;
-    }
+  // Initialize as soon as DOM is ready, before other scripts
+  $(document).ready(function() {
+    initSquarePayments();
+  });
 
-    var cfg = CRM.vars.orgUschessSquare;
-    if (!cfg.applicationId || !cfg.locationId) {
+  function initSquarePayments() {
+    
+    // Try to get config from window variables first (more reliable)
+    var appId = window.squareApplicationId;
+    var locationId = window.squareLocationId;
+    
+    // Fall back to CRM.vars if window variables not set
+    if (!appId || !locationId) {
+      console.log('Square.js: Window variables not found, trying CRM.vars');
+      if (!CRM || !CRM.vars || !CRM.vars.orgUschessSquare) {
+        console.warn('Square.js: CRM.vars.orgUschessSquare not found');
+        return;
+      }
+      var cfg = CRM.vars.orgUschessSquare;
+      appId = cfg.applicationId;
+      locationId = cfg.locationId;
+    }
+    
+    if (!appId || !locationId) {
       console.error('Square config missing applicationId or locationId');
       return;
     }
 
-    // Find the main form (front-end contribution or event form).
-    var $form = $('form#Main, form.CRM_Contribute_Form_Contribution, form.CRM_Event_Form_Registration').first();
+    // Find the main form - try multiple selectors
+    var $form = $('form#Main').length ? $('form#Main') : 
+                $('form.CRM_Contribute_Form_Contribution').length ? $('form.CRM_Contribute_Form_Contribution') :
+                $('form.CRM_Event_Form_Registration').length ? $('form.CRM_Event_Form_Registration') :
+                $('form[id*="Contribution"]').first();
+    
     if (!$form.length) {
+      console.warn('Square.js: No form found, trying all forms');
+      $form = $('form').first();
+      if (!$form.length) {
+        console.error('Square.js: No form found at all');
+        return;
+      }
+    }
+    // Check if card container exists
+    if (!$('#square-card-container').length) {
+      console.warn('Square.js: Card container not found');
       return;
     }
+    console.log('Square.js: Card container found');
+    
+    // Verify token field exists
+    var $tokenField = $('#square_payment_token');
+    if (!$tokenField.length) {
+      console.error('Square.js: Token field #square_payment_token not found');
+      return;
+    }
+    console.log('Square.js: Token field found');
 
     var payments = null;
     var card = null;
     var initializing = false;
+    var tokenized = false;
 
     async function initSquare() {
       if (initializing) {
@@ -28,110 +69,103 @@
 
       try {
         // Square global is provided by the SDK.
-        payments = window.Square && window.Square.payments
-          ? window.Square.payments(cfg.applicationId, cfg.locationId)
-          : null;
-
-        if (!payments) {
+        if (!window.Square || !window.Square.payments) {
           throw new Error('Square.payments API not available on page.');
         }
+        payments = window.Square.payments(appId, locationId);
 
+        if (!payments) {
+          throw new Error('Failed to initialize Square payments.');
+        }
         card = await payments.card();
         await card.attach('#square-card-container');
       } catch (e) {
-        console.error('Failed to initialize Square Web Payments SDK', e);
         $('#square-card-errors')
           .text('Unable to load secure card entry. Please try again later or contact support.')
           .show();
       }
     }
 
-    // Initialise card UI.
+    // Initialize card UI.
     initSquare();
-
     async function tokenizeAndSubmit(event) {
+      
+      // If already tokenized, allow normal submission
+      if (tokenized) {
+        return true;
+      }
+
+      // If card is not initialized, let normal submit happen for server-side validation
       if (!card) {
-        // If card is not initialised, let the normal submit happen so
-        // server-side validation can show a sensible error.
-        return;
+        return true;
       }
 
       event.preventDefault();
+      event.stopImmediatePropagation();
 
       var $error = $('#square-card-errors');
       $error.hide().text('');
 
       try {
         var result = await card.tokenize();
-
         if (!result || result.status !== 'OK') {
-          // Some kind of card error.
           var message = 'Your card could not be processed. Please check your details.';
           if (result && result.errors && result.errors.length) {
-            // Show first error message if available.
             message = result.errors[0].message || message;
           }
+          console.error('Square.js: Tokenization failed', message);
           $error.text(message).show();
-          return;
+          return false;
         }
 
         var nonce = result.token;
         if (!nonce) {
           $error.text('Missing card token from Square. Please try again.').show();
-          return;
+          return false;
         }
 
         // Put token into hidden field for CiviCRM to pick up.
-        $('#square-payment-token').val(nonce);
+        var $tokenField = $('#square_payment_token');
+        $tokenField.val(nonce);
 
-        // Optional AJAX round-trip – allows future server-side checks / transforms
-        // without changing our front-end logic.
-        if (cfg.ajaxUrl) {
-          try {
-            var ajaxResp = await $.ajax({
-              url: cfg.ajaxUrl,
-              type: 'POST',
-              dataType: 'json',
-              data: {
-                class_name: 'CRM_UschessSquare_Ajax_SquareToken',
-                fn_name: 'tokenize',
-                token: nonce
-              }
-            });
+        // Mark as tokenized so next submit goes through
+        tokenized = true;
 
-            if (ajaxResp && ajaxResp.is_error) {
-              $error
-                .text(ajaxResp.error_message || 'Card processing failed. Please try again.')
-                .show();
-              return;
-            }
-
-            if (ajaxResp && ajaxResp.token) {
-              // If server returns a transformed token, use that.
-              $('#square-payment-token').val(ajaxResp.token);
-            }
-          } catch (xhrErr) {
-            console.error('Square token AJAX error', xhrErr);
-            $error
-              .text('An error occurred while processing your card. Please try again.')
-              .show();
-            return;
-          }
-        }
-
-        // All good: unbind our handler and submit for real.
+        // Submit the form
         $form.off('submit.square');
-        $form.trigger('submit');
+        $form.submit();
 
       } catch (e) {
-        console.error('Unexpected error during Square tokenize', e);
         $error
           .text('Unexpected error processing your card. Please try again.')
           .show();
+        return false;
       }
     }
 
-    // Attach submit handler (namespaced so we can remove it).
-    $form.on('submit.square', tokenizeAndSubmit);
-  });
+    // Attach submit handler FIRST (before other handlers)
+    // Use 'on' with higher priority to intercept before CiviCRM's handlers
+    $form.on('submit', async function(event) {
+      
+      // If already tokenized, allow normal submission
+      if (tokenized) {
+        return true;
+      }
+
+      // If card is not initialized, let normal submit happen
+      if (!card) {
+        console.log('Square.js: Card not initialized, allowing normal submission');
+        return true;
+      }
+
+      // Prevent default submission and tokenize
+      console.log('Square.js: Preventing default submission to tokenize');
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      
+      // Call tokenization and wait for it
+      await tokenizeAndSubmit(event);
+      return false;
+    });
+  }
 })(CRM.$, CRM);

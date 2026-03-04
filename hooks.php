@@ -31,38 +31,17 @@ function org_uschess_square_civicrm_pageRun(&$page) {
       CRM_Utils_System::civiExit();
     }
 
-    // Instantiate your processor class.
-    $processor = new CRM_Core_Payment_Square('live', $pp);
+    // Determine mode from processor config
+    $mode = !empty($pp['is_test']) ? 'test' : 'live';
 
-    // Explicit event router for Square webhook events.
-    $payload = file_get_contents('php://input');
-    $event = json_decode($payload, TRUE);
+    // Instantiate processor class with correct mode
+    $processor = new CRM_Core_Payment_Square($mode, $pp);
 
-    if (!is_array($event) || empty($event['type'])) {
-      CRM_Core_Error::debug_log_message("Square Webhook: Invalid payload");
-      CRM_Utils_System::civiExit();
-    }
-
+    // Create webhook handler
     $handler = new CRM_UschessSquare_Webhook($processor);
 
-    switch ($event['type']) {
-      case 'subscription.canceled':
-        $handler->handleSubscriptionCanceled($event);
-        break;
-
-      case 'invoice.paid':
-        $handler->handleInvoicePaid($event);
-        break;
-
-      case 'subscription.updated':
-        $handler->handleSubscriptionUpdated($event);
-        break;
-
-      default:
-        // fallback for unhandled events
-        $handler->handle($event);
-        break;
-    }
+    // Process webhook
+    $handler->handle();
 
     CRM_Utils_System::civiExit();
   }
@@ -88,6 +67,77 @@ function org_uschess_square_civicrm_xmlMenu(&$files) {
  */
 function org_uschess_square_civicrm_install() {
   _org_uschess_square_civix_civicrm_install();
+  org_uschess_square_create_custom_fields();
+  org_uschess_square_create_webhook_tables();
+}
+
+/**
+ * Create custom fields for Square integration on install.
+ */
+function org_uschess_square_create_custom_fields() {
+  try {
+    // Check if custom group exists
+    $group = civicrm_api3('CustomGroup', 'get', [
+      'name' => 'square_data',
+      'sequential' => 1,
+    ]);
+
+    if (!empty($group['count'])) {
+      $groupId = $group['values'][0]['id'];
+    }
+    else {
+      // Create custom group
+      $result = civicrm_api3('CustomGroup', 'create', [
+        'title' => 'Square Data',
+        'name' => 'square_data',
+        'extends' => 'Contact',
+        'style' => 'Inline',
+        'is_active' => 1,
+      ]);
+      $groupId = $result['id'];
+    }
+
+    // Create Square Customer ID field
+    $field = civicrm_api3('CustomField', 'get', [
+      'custom_group_id' => $groupId,
+      'name' => 'square_customer_id',
+      'sequential' => 1,
+    ]);
+    if (empty($field['count'])) {
+      civicrm_api3('CustomField', 'create', [
+        'custom_group_id' => $groupId,
+        'label' => 'Square Customer ID',
+        'name' => 'square_customer_id',
+        'data_type' => 'String',
+        'html_type' => 'Text',
+        'is_active' => 1,
+        'is_view' => 1,
+        'is_searchable' => 0,
+      ]);
+    }
+
+    // Create Square Card ID field
+    $field = civicrm_api3('CustomField', 'get', [
+      'custom_group_id' => $groupId,
+      'name' => 'square_card_id',
+      'sequential' => 1,
+    ]);
+    if (empty($field['count'])) {
+      civicrm_api3('CustomField', 'create', [
+        'custom_group_id' => $groupId,
+        'label' => 'Square Card ID',
+        'name' => 'square_card_id',
+        'data_type' => 'String',
+        'html_type' => 'Text',
+        'is_active' => 1,
+        'is_view' => 1,
+        'is_searchable' => 0,
+      ]);
+    }
+  }
+  catch (Exception $e) {
+    CRM_Core_Error::debug_log_message('Square: Error creating custom fields: ' . $e->getMessage());
+  }
 }
 
 /**
@@ -132,6 +182,9 @@ function org_uschess_square_civicrm_managed(&$entities) {
  * @param CRM_Core_Form $form
  */
 function org_uschess_square_civicrm_buildForm($formName, &$form) {
+  // Debug: Log all forms to see what's being called
+  CRM_Core_Error::debug_log_message('Square buildForm: Form name = ' . $formName);
+  
   // Only act on contribution and event registration forms.
   if (!in_array($formName, ['CRM_Contribute_Form_Contribution', 'CRM_Event_Form_Registration'], TRUE)) {
     return;
@@ -151,7 +204,7 @@ function org_uschess_square_civicrm_buildForm($formName, &$form) {
 
   // Hidden field where the JS will store the card token.
   if (!$form->elementExists('square_payment_token')) {
-    $form->add('hidden', 'square_payment_token', '', ['id' => 'square-payment-token']);
+    $form->add('hidden', 'square_payment_token', '', ['id' => 'square_payment_token']);
   }
 
   // Inject the container where Square will mount the card fields + error box.
@@ -173,13 +226,21 @@ function org_uschess_square_civicrm_buildForm($formName, &$form) {
 
   $resources = CRM_Core_Resources::singleton();
 
-  // Load Square’s JS SDK.
+  // Load Square's JS SDK.
   $resources->addScriptUrl($sdkUrl, 0, 'html-header');
 
   // Load our own integration JS from the extension.
   $resources->addScriptFile('org.uschess.square', 'js/square.js', 10, 'html-header');
 
-  // Pass settings to JS.
+  // Pass settings to JS via window variables (more reliable than CRM.vars)
+  $inlineScript = "
+    window.squareApplicationId = '" . addslashes($processor['user_name'] ?? '') . "';
+    window.squareLocationId = '" . addslashes($processor['signature'] ?? ($processor['password'] ?? '')) . "';
+    window.squareIsSandbox = " . ($isSandbox ? 'true' : 'false') . ";
+  ";
+  $resources->addScript($inlineScript, 'html-header');
+
+  // Also pass settings to JS via CRM.vars for compatibility.
   $settings = [
     'applicationId' => $processor['user_name'] ?? '',
     // Prefer signature as Location ID (per config labels), then password as fallback.
@@ -204,14 +265,12 @@ function org_uschess_square_civicrm_buildForm($formName, &$form) {
 /**
  * Implementation of hook_civicrm_post().
  *
- * Basic support for detecting edits to recurring contributions that
- * are processed by the Square payment processor. For now this only logs
- * the change and provides a clear extension point for future logic
- * that will sync edits to the corresponding Square subscription.
+ * Handles edits and cancellations to recurring contributions that
+ * are processed by the Square payment processor.
  */
 function org_uschess_square_civicrm_post($op, $objectName, $objectId, &$objectRef) {
-  // We only care about edits to recurring contribution records.
-  if ($objectName !== 'ContributionRecur' || $op !== 'edit') {
+  // We only care about edits and deletes to recurring contribution records.
+  if ($objectName !== 'ContributionRecur' || !in_array($op, ['edit', 'delete'], TRUE)) {
     return;
   }
 
@@ -222,9 +281,9 @@ function org_uschess_square_civicrm_post($op, $objectName, $objectId, &$objectRe
   }
 
   try {
-    // Load the updated recurring contribution record.
+    // Load the recurring contribution record.
     $recur = \Civi\Api4\ContributionRecur::get(FALSE)
-      ->addSelect('id', 'payment_processor_id', 'amount', 'status_id', 'frequency_interval', 'frequency_unit')
+      ->addSelect('id', 'payment_processor_id', 'amount', 'contribution_status_id', 'frequency_interval', 'frequency_unit', 'processor_id')
       ->addWhere('id', '=', (int) $objectId)
       ->execute()
       ->first();
@@ -235,7 +294,7 @@ function org_uschess_square_civicrm_post($op, $objectName, $objectId, &$objectRe
 
     // Load the payment processor to see if it is a Square processor.
     $processor = \Civi\Api4\PaymentProcessor::get(FALSE)
-      ->addSelect('id', 'name', 'class_name', 'payment_processor_type_id:label')
+      ->addSelect('id', 'name', 'class_name', 'payment_processor_type_id:label', 'is_test')
       ->addWhere('id', '=', (int) $recur['payment_processor_id'])
       ->execute()
       ->first();
@@ -255,20 +314,112 @@ function org_uschess_square_civicrm_post($op, $objectName, $objectId, &$objectRe
       return;
     }
 
-    // At this point we know a Square-backed recurring contribution was edited.
-    // For now we simply log the change. Later this is where we can call into
-    // CRM_Core_Payment_Square to adjust the corresponding Square subscription.
+    // Handle cancellation (status_id = 3 is Cancelled)
+    if ($op === 'edit' && !empty($recur['processor_id'])) {
+      $oldStatus = $objectRef->contribution_status_id ?? NULL;
+      $newStatus = $recur['contribution_status_id'] ?? NULL;
+
+      // Check if status changed to Cancelled (3)
+      if ($newStatus == 3 && $oldStatus != 3) {
+        // Cancel the Square subscription
+        try {
+          $mode = !empty($processor['is_test']) ? 'test' : 'live';
+          $squareProcessor = new CRM_Core_Payment_Square($mode, $processor);
+          $squareProcessor->cancelSubscription($recur['processor_id']);
+          CRM_Core_Error::debug_log_message(sprintf(
+            'Square: Cancelled subscription %s for recurring contribution #%d',
+            $recur['processor_id'],
+            $recur['id']
+          ));
+        }
+        catch (Exception $e) {
+          CRM_Core_Error::debug_log_message('Square: Error cancelling subscription: ' . $e->getMessage());
+        }
+      }
+      // Handle amount changes
+      elseif (!empty($recur['processor_id']) && !empty($objectRef->amount)) {
+        $oldAmount = $objectRef->amount ?? NULL;
+        $newAmount = $recur['amount'] ?? NULL;
+
+        if ($oldAmount != $newAmount && $newAmount > 0) {
+          try {
+            $mode = !empty($processor['is_test']) ? 'test' : 'live';
+            $squareProcessor = new CRM_Core_Payment_Square($mode, $processor);
+            $currency = $recur['currency'] ?? 'USD';
+            $squareProcessor->updateSubscriptionAmount($recur['processor_id'], $newAmount, $currency);
+            CRM_Core_Error::debug_log_message(sprintf(
+              'Square: Updated subscription %s amount from %s to %s for recurring contribution #%d',
+              $recur['processor_id'],
+              $oldAmount,
+              $newAmount,
+              $recur['id']
+            ));
+          }
+          catch (Exception $e) {
+            CRM_Core_Error::debug_log_message('Square: Error updating subscription amount: ' . $e->getMessage());
+          }
+        }
+      }
+    }
+
+    // Log all edits for debugging
     CRM_Core_Error::debug_log_message(sprintf(
-      'Square: ContributionRecur #%d edited (amount=%s, status_id=%s, freq=%s %s).',
+      'Square: ContributionRecur #%d %s (amount=%s, status_id=%s, freq=%s %s, processor_id=%s).',
       $recur['id'],
+      $op,
       $recur['amount'] ?? 'n/a',
-      $recur['status_id'] ?? 'n/a',
+      $recur['contribution_status_id'] ?? 'n/a',
       $recur['frequency_interval'] ?? 'n/a',
-      $recur['frequency_unit'] ?? 'n/a'
+      $recur['frequency_unit'] ?? 'n/a',
+      $recur['processor_id'] ?? 'n/a'
     ));
   }
   catch (Exception $e) {
     CRM_Core_Error::debug_log_message('Square: Error in civicrm_post ContributionRecur handler: ' . $e->getMessage());
+  }
+}
+
+/**
+ * Create webhook tracking tables on install.
+ */
+function org_uschess_square_create_webhook_tables() {
+  try {
+    $db = CRM_Core_DAO::getDatabaseConnection();
+
+    // Create webhook event tracking table
+    $sql = "
+      CREATE TABLE IF NOT EXISTS civicrm_square_webhook_event (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        event_id VARCHAR(255) NOT NULL UNIQUE,
+        processed_at DATETIME NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_event_id (event_id),
+        INDEX idx_processed_at (processed_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ";
+    $db->query($sql);
+
+    // Create webhook delivery log table
+    $sql = "
+      CREATE TABLE IF NOT EXISTS civicrm_square_webhook_delivery (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        event_id VARCHAR(255),
+        event_type VARCHAR(100) NOT NULL,
+        message TEXT,
+        http_status INT,
+        delivered_at DATETIME NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_event_id (event_id),
+        INDEX idx_event_type (event_type),
+        INDEX idx_delivered_at (delivered_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ";
+    $db->query($sql);
+
+    CRM_Core_Error::debug_log_message('Square: Webhook tables created successfully');
+  }
+  catch (Exception $e) {
+    CRM_Core_Error::debug_log_message('Square: Error creating webhook tables: ' . $e->getMessage());
   }
 }
 

@@ -5,6 +5,8 @@ return [
     'name'   => 'SquarePaymentProcessor',
     'entity' => 'payment_processor_type',
     'module' => 'org.uschess.square',
+    'update' => 'always',
+    'cleanup' => 'never',
     'params' => [
       'version'     => 3,
       'title'       => 'Square',
