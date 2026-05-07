@@ -39,7 +39,7 @@ return [
 
       // On-site card entry (we use Web Payments SDK)
       // 1 = onsite, 4 = offsite/redirect
-      'billing_mode' => 4,
+      'billing_mode' => 1,
 
       // 1 = credit card
       'payment_type' => 1,

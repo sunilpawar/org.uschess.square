@@ -189,7 +189,7 @@ function square_civicrm_buildForm($formName, &$form): void {
   if (!in_array($formName, ['CRM_Contribute_Form_Contribution', 'CRM_Event_Form_Registration'], TRUE)) {
     return;
   }
-
+  return;
   // Get payment processor currently in use.
   $processor = $form->getVar('_paymentProcessor');
   if (empty($processor)) {

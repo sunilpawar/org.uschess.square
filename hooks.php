@@ -152,6 +152,80 @@ function org_uschess_square_civicrm_uninstall() {
  */
 function org_uschess_square_civicrm_enable() {
   _org_uschess_square_civix_civicrm_enable();
+  org_uschess_square_ensureOnSiteBillingMode(TRUE);
+}
+
+/**
+ * Ensure Square payment processors are configured as on-site (billing_mode=1).
+ *
+ * Webform CiviCRM checks the payment processor instance's billing_mode; if it's
+ * off-site it will use an IPN/confirm flow which does not preserve our token
+ * field, leading to "Missing Square payment token".
+ *
+ * @param bool $force
+ *   If TRUE, run even if previously marked as fixed.
+ */
+function org_uschess_square_ensureOnSiteBillingMode($force = FALSE) {
+  try {
+    if (!$force && class_exists('\\Civi') && \Civi::settings()->get('org_uschess_square_billing_mode_fixed')) {
+      return;
+    }
+
+    // Prefer API4.
+    if (class_exists('\\Civi\\Api4\\PaymentProcessor')) {
+      $rows = \Civi\Api4\PaymentProcessor::get(FALSE)
+        ->addSelect('id', 'class_name', 'billing_mode', 'payment_processor_type_id:label')
+        ->execute();
+
+      $toUpdate = [];
+      foreach ($rows as $row) {
+        $label = $row['payment_processor_type_id:label'] ?? '';
+        $isSquare = (
+          (!empty($row['class_name']) && $row['class_name'] === 'Payment_Square') ||
+          (!empty($label) && stripos($label, 'square') !== FALSE)
+        );
+        if ($isSquare && ((int) ($row['billing_mode'] ?? 0) !== 1)) {
+          $toUpdate[] = (int) $row['id'];
+        }
+      }
+
+      if (!empty($toUpdate)) {
+        foreach ($toUpdate as $id) {
+          \Civi\Api4\PaymentProcessor::update(FALSE)
+            ->addWhere('id', '=', $id)
+            ->addValue('billing_mode', 1)
+            ->execute();
+        }
+      }
+    }
+    else {
+      // Fallback to API3 if API4 isn't available.
+      $result = civicrm_api3('PaymentProcessor', 'get', [
+        'options' => ['limit' => 0],
+      ]);
+      foreach (($result['values'] ?? []) as $pp) {
+        $label = $pp['payment_processor_type_id:label'] ?? '';
+        $isSquare = (
+          (!empty($pp['class_name']) && $pp['class_name'] === 'Payment_Square') ||
+          (!empty($label) && stripos($label, 'square') !== FALSE)
+        );
+        if ($isSquare && ((int) ($pp['billing_mode'] ?? 0) !== 1)) {
+          civicrm_api3('PaymentProcessor', 'create', [
+            'id' => $pp['id'],
+            'billing_mode' => 1,
+          ]);
+        }
+      }
+    }
+
+    if (class_exists('\\Civi')) {
+      \Civi::settings()->set('org_uschess_square_billing_mode_fixed', 1);
+    }
+  }
+  catch (Exception $e) {
+    // Non-fatal: if we can't auto-fix, the admin can update billing_mode manually.
+    CRM_Core_Error::debug_log_message('Square: Unable to enforce on-site billing_mode: ' . $e->getMessage());
+  }
 }
 
 /**

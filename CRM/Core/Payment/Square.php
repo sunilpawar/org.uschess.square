@@ -233,7 +233,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
   protected function validateSquareWebhookSignature($raw, $headers, $url) {
     $key = $this->_paymentProcessor['subject'] ?? NULL;
     if (!$key) {
-      Civi::log()->debug("Square Webhook: Missing signature key");
+     // Civi::log()->debug("Square Webhook: Missing signature key");
       return FALSE;
     }
 
@@ -242,7 +242,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
       ?? NULL;
 
     if (!$provided) {
-      Civi::log()->debug("Square Webhook: Missing X-Square-Signature header");
+     // Civi::log()->debug("Square Webhook: Missing X-Square-Signature header");
       return FALSE;
     }
 
@@ -265,7 +265,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     }
     catch (\Exception $e) {
       $msg = "Square checkConfig failure (" . ($this->_isTest ? 'SANDBOX' : 'PRODUCTION') . "): " . $e->getMessage();
-      Civi::log()->debug($msg);
+     // Civi::log()->debug($msg);
       return $msg;
     }
   }
@@ -279,7 +279,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
   public function syncPaymentFromSquare(array $payment) {
     $paymentId = $payment['id'] ?? NULL;
     if (!$paymentId) {
-      Civi::log()->debug('Square syncPaymentFromSquare(): missing payment ID.');
+     // Civi::log()->debug('Square syncPaymentFromSquare(): missing payment ID.');
       return;
     }
 
@@ -328,7 +328,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     }
 
     if (!$contactId) {
-      Civi::log()->debug("Square syncPaymentFromSquare(): cannot resolve contact for payment {$paymentId}");
+     // Civi::log()->debug("Square syncPaymentFromSquare(): cannot resolve contact for payment {$paymentId}");
       return;
     }
 
@@ -355,7 +355,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     $paymentId = $refund['payment_id'] ?? NULL;
     $refundId = $refund['id'] ?? NULL;
     if (!$paymentId || !$refundId) {
-      Civi::log()->debug('Square syncRefundFromSquare(): missing data.');
+     // Civi::log()->debug('Square syncRefundFromSquare(): missing data.');
       return;
     }
 
@@ -367,7 +367,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
       ->first();
 
     if (!$contribution) {
-      Civi::log()->debug("Square syncRefundFromSquare(): no contribution for payment {$paymentId}");
+     // Civi::log()->debug("Square syncRefundFromSquare(): no contribution for payment {$paymentId}");
       return;
     }
 
@@ -386,7 +386,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
   public function syncSubscriptionFromWebhook(array $subscription) {
     $id = $subscription['id'] ?? NULL;
     if (!$id) {
-      Civi::log()->debug('Square syncSubscriptionFromWebhook(): missing subscription ID.');
+     // Civi::log()->debug('Square syncSubscriptionFromWebhook(): missing subscription ID.');
       return;
     }
 
@@ -400,7 +400,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
       ->first();
 
     if (!$recur) {
-      Civi::log()->debug("Square syncSubscriptionFromWebhook(): no matching recur for {$id}");
+     // Civi::log()->debug("Square syncSubscriptionFromWebhook(): no matching recur for {$id}");
       return;
     }
 
@@ -430,13 +430,13 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
   public function syncInvoiceFromSquare(array $invoice) {
     $invoiceId = $invoice['id'] ?? NULL;
     if (!$invoiceId) {
-      Civi::log()->debug('Square syncInvoiceFromSquare(): missing invoice ID.');
+     // Civi::log()->debug('Square syncInvoiceFromSquare(): missing invoice ID.');
       return;
     }
 
     $subscriptionId = $invoice['subscription_id'] ?? NULL;
     if (!$subscriptionId) {
-      Civi::log()->debug("Square syncInvoiceFromSquare(): invoice {$invoiceId} has no subscription_id.");
+     // Civi::log()->debug("Square syncInvoiceFromSquare(): invoice {$invoiceId} has no subscription_id.");
       return;
     }
 
@@ -448,7 +448,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
       ->first();
 
     if (!$recur) {
-      Civi::log()->debug("Square syncInvoiceFromSquare(): no recur for subscription {$subscriptionId}");
+     // Civi::log()->debug("Square syncInvoiceFromSquare(): no recur for subscription {$subscriptionId}");
       return;
     }
 
@@ -515,7 +515,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
 
     if (empty($recur)) {
       // No such recurring record exists — log and stop
-      Civi::log()->debug("Square sync: No local contribution_recur record found for subscription {$squareSubscriptionId}");
+     // Civi::log()->debug("Square sync: No local contribution_recur record found for subscription {$squareSubscriptionId}");
       return;
     }
 
@@ -542,7 +542,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
         ->addValues($updates)
         ->execute();
 
-      Civi::log()->debug("Square sync: Updated recurring contribution {$recurId} from subscription {$squareSubscriptionId}");
+     // Civi::log()->debug("Square sync: Updated recurring contribution {$recurId} from subscription {$squareSubscriptionId}");
     }
   }
 
@@ -725,7 +725,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
    */
   public function handleSubscriptionCancelled(array $payload) {
     if (empty($payload['data']['object']['subscription']['id'])) {
-      Civi::log()->debug('Square webhook: subscription.canceled missing subscription ID.');
+      // Civi::log()->debug('Square webhook: subscription.canceled missing subscription ID.');
       return;
     }
 
@@ -739,7 +739,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
       ->first();
 
     if (empty($recur)) {
-      Civi::log()->debug("Square webhook: No matching contribution_recur found for cancelled subscription {$subscriptionId}.");
+      // Civi::log()->debug("Square webhook: No matching contribution_recur found for cancelled subscription {$subscriptionId}.");
       return;
     }
 
@@ -751,7 +751,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
       ->addValue('contribution_status_id', 3)
       ->execute();
 
-    Civi::log()->debug("Square webhook: Marked recurring contribution {$recurId} as Cancelled for subscription {$subscriptionId}.");
+    // Civi::log()->debug("Square webhook: Marked recurring contribution {$recurId} as Cancelled for subscription {$subscriptionId}.");
   }
 
   /**
@@ -821,14 +821,21 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
    */
   protected function doOneTimePayment(&$params) {
     // 1. Extract Web Payments SDK token.
+    //    Webform CiviCRM's confirm-form path does not always merge $_POST
+    //    values into payment params, so we fall back to the request globals.
     $token = $params['square_payment_token']
       ?? $params['payment_token']
       ?? $params['token']
+      ?? $_POST['square_payment_token']
+      ?? $_REQUEST['square_payment_token']
       ?? NULL;
 
     if (!$token) {
       throw new \CRM_Core_Exception('Missing Square payment token.');
     }
+
+    // Persist it back into $params so downstream code can see it.
+    $params['square_payment_token'] = $token;
 
     // 2. Determine amount and currency.
     $amount = $params['amount'] ?? $params['total_amount'] ?? NULL;
@@ -906,14 +913,20 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
    */
   public function doRecurPayment(&$params) {
     // 1. Extract token from Web Payments SDK.
+    //    Webform CiviCRM's confirm-form path does not always merge $_POST
+    //    values into payment params, so we fall back to the request globals.
     $token = $params['square_payment_token']
       ?? $params['payment_token']
       ?? $params['token']
+      ?? $_POST['square_payment_token']
+      ?? $_REQUEST['square_payment_token']
       ?? NULL;
 
     if (!$token) {
       throw new CRM_Core_Exception('Missing Square card token for recurring payments.');
     }
+
+    $params['square_payment_token'] = $token;
 
     // 2. Ensure we have a valid Recurring Contribution ID from CiviCRM.
     $recurId = $params['contributionRecurID'] ?? NULL;
@@ -924,14 +937,13 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     // 3. Ensure customer exists / or create one
     $customerId = $this->ensureSquareCustomer($params);
     if ($this->findSquareCustomerById($customerId)) {
-      Civi::log()->debug("Square doRecurPayment: Found existing Square customer ID {$customerId} for CiviCRM recur ID {$recurId}");
+      // Civi::log()->debug("Square doRecurPayment: Found existing Square customer ID {$customerId} for CiviCRM recur ID {$recurId}");
       $this->updateSquareCustomerDetails($customerId, $params);
     }
     else {
       throw new CRM_Core_Exception("Failed to find or create Square customer for CiviCRM recur ID {$recurId}");
     }
 
-    Civi::log()->debug("Square doRecurPayment: Using Square customer ID {$customerId} for CiviCRM recur ID {$recurId}");
     // 4. Convert card nonce → persistent card_id
     if (empty($params['square_payment_token'])) {
       $cardId = $this->createCardOnFile($customerId, $token);
@@ -940,7 +952,6 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
       // If using 'square_payment_token', we assume it's already a card on file ID.
       $cardId = $token;
     }
-    Civi::log()->debug("Square doRecurPayment: Using Square card ID {$cardId} for CiviCRM recur ID {$recurId}");
 
     // 5. Determine plan ID
     $planVariationId = $this->getPlanVariationIdForParams($params);
@@ -1092,7 +1103,6 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
 
     if (empty($response['refund']) || empty($response['refund']['id'])) {
       $msg = 'Square refund failed: unexpected response.';
-      Civi::log()->debug($msg . ' Response: ' . print_r($response, TRUE));
       throw new CRM_Core_Exception($msg);
     }
 
@@ -1101,7 +1111,6 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
 
     if (!in_array($status, ['PENDING', 'COMPLETED', 'APPROVED'], TRUE)) {
       $msg = "Square refund not completed. Status: {$status}";
-      Civi::log()->debug($msg . ' Refund: ' . print_r($refund, TRUE));
       throw new CRM_Core_Exception($msg);
     }
 
@@ -1161,13 +1170,13 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
 
     if ($curlError) {
       $msg = 'Square API cURL error: ' . $curlError;
-      Civi::log()->debug($msg);
+     // Civi::log()->debug($msg);
       throw new CRM_Core_Exception($msg);
     }
 
     if ($raw === FALSE || $raw === '') {
       $msg = 'Empty response from Square API.';
-      Civi::log()->debug($msg);
+     // Civi::log()->debug($msg);
       throw new CRM_Core_Exception($msg);
     }
 
@@ -1176,7 +1185,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     
     if ($decoded === NULL) {
       $msg = 'Failed to decode Square API response JSON.';
-      Civi::log()->debug($msg . ' Raw: ' . $raw);
+     // Civi::log()->debug($msg . ' Raw: ' . $raw);
       throw new CRM_Core_Exception($msg);
     }
 
@@ -1191,7 +1200,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
         }
         $errorMsg .= ' ' . implode(' | ', $errorDetails);
       }
-      Civi::log()->debug($errorMsg . ' Response: ' . print_r($decoded, TRUE));
+     // Civi::log()->debug($errorMsg . ' Response: ' . print_r($decoded, TRUE));
       throw new CRM_Core_Exception($errorMsg);
     }
 
@@ -1289,7 +1298,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
 
     // 1. Check if we already have a stored Square Customer ID.
     if ($customerId = $this->getSquareCustomerId($contactID) ) {
-      Civi::log()->debug('Square customer already exists for contact ' . $contactID . ': ' . $customerId);
+     // Civi::log()->debug('Square customer already exists for contact ' . $contactID . ': ' . $customerId);
       return $customerId;
     }
     // Migration logic: check whether this contact already exists in Square based on reference_id.
@@ -1329,7 +1338,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
       }
     }
     catch (\Exception $e) {
-      Civi::log()->debug('Square migration lookup error: ' . $e->getMessage());
+     // Civi::log()->debug('Square migration lookup error: ' . $e->getMessage());
     }
     $existingCustomerId = $this->getSquareCustomerId($contactID);
     if (!empty($existingCustomerId)) {
@@ -1609,7 +1618,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
 
 
     $planId = $this->getOrCreateSubscriptionPlan($planName);
-    Civi::log()->debug("Square plan ID for {$entity}: {$planId}");
+   // Civi::log()->debug("Square plan ID for {$entity}: {$planId}");
     return $this->getOrCreatePlanVariation(
       $planId, $amount,
       $currency, $intervalUnit,
@@ -1917,42 +1926,48 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
       <div id="square-card-errors" class="messages error" style="display:none"></div>
     ';
 
-    // Attach this to the billing block region so it appears in the right place.
-    CRM_Core_Region::instance('billing-block')->add([
-      'markup' => $markup,
-    ]);
-
     $resources = CRM_Core_Resources::singleton();
 
     // Decide sandbox vs live SDK URL based on processor mode.
     $isSandbox = !empty($this->_mode) && $this->_mode === 'test';
+
     $sdkUrl = $isSandbox
       ? 'https://sandbox.web.squarecdn.com/v1/square.js'
       : 'https://web.squarecdn.com/v1/square.js';
 
     // Load Square's JS SDK.
-    $resources->addScriptUrl($sdkUrl, 0, 'html-header');
+    CRM_Core_Region::instance('billing-block')->addScriptUrl($sdkUrl);
 
     // Load our own integration JS from the extension.
-    $resources->addScriptFile('org.uschess.square', 'js/square.js', 10, 'html-header');
-
+    CRM_Core_Region::instance('billing-block')->add([
+      'scriptFile' => [
+        'org.uschess.square',
+        'js/square.js',
+      ],
+      // Load after other scripts on form (default = 1)
+      'weight' => 100,
+    ]);
     // Pass settings to JS via window variables (more reliable than CRM.vars)
     $inlineScript = "
       window.squareApplicationId = '" . addslashes($this->_paymentProcessor['user_name'] ?? '') . "';
       window.squareLocationId = '" . addslashes($this->_paymentProcessor['signature'] ?? ($this->_paymentProcessor['password'] ?? '')) . "';
       window.squareIsSandbox = " . ($isSandbox ? 'true' : 'false') . ";
     ";
-    $resources->addScript($inlineScript, 'html-header');
+    CRM_Core_Region::instance('billing-block')->addScript($inlineScript);
 
     // Also pass settings to JS via CRM.vars for compatibility.
     $settings = [
       'applicationId' => $this->_paymentProcessor['user_name'] ?? '',
-      'locationId'    => $this->_paymentProcessor['signature'] ?? ($this->_paymentProcessor['password'] ?? ''),
-      'isSandbox'     => $isSandbox,
+      'locationId' => $this->_paymentProcessor['signature'] ?? ($this->_paymentProcessor['password'] ?? ''),
+      'isSandbox' => $isSandbox,
     ];
-
-    $resources->addSetting([
+    CRM_Core_Region::instance('billing-block')->addSetting([
       'orgUschessSquare' => $settings,
+    ]);
+
+    // Attach this to the billing block region so it appears in the right place.
+    CRM_Core_Region::instance('billing-block')->add([
+      'markup' => $markup,
     ]);
   }
 
@@ -1998,9 +2013,9 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     int  $intervalStep = 1,
     ?int $installments = NULL
   ): string {
-    Civi::log()->debug("Looking up Square plan variation: {$planId}, {$amount} {$currency}, every {$intervalStep} {$intervalUnit}");
+    // Civi::log()->debug("Looking up Square plan variation: {$planId}, {$amount} {$currency}, every {$intervalStep} {$intervalUnit}");
     $cadence = $this->resolveCadence($intervalUnit, $intervalStep);
-    Civi::log()->debug("Resolved Square cadence: {$cadence}");
+    // Civi::log()->debug("Resolved Square cadence: {$cadence}");
     $cacheKey = "{$planId}_{$cadence}_{$amount}";
     $cache = Civi::settings()->get('org_square_plan_variation_cache') ?? [];
 
@@ -2014,7 +2029,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
       $amount,
       $currency
     );
-    Civi::log()->debug("Creating label Square plan variation: {$label}");
+    // Civi::log()->debug("Creating label Square plan variation: {$label}");
     $amountCents = (int) round($amount * 100);
 
     $body = [
@@ -2051,7 +2066,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     $resp = $this->squareRequest('POST', '/v2/catalog/object', $body);
 
     $variationId = $resp['catalog_object']['id'] ?? NULL;
-    Civi::log()->debug("Created Square plan variation ID: {$variationId}");
+   // Civi::log()->debug("Created Square plan variation ID: {$variationId}");
     if (!$variationId) {
       throw new CRM_Core_Exception('Failed to create Square plan variation.');
     }
@@ -2092,7 +2107,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
    * @throws CRM_Core_Exception
    */
   protected function getOrCreateSubscriptionPlan(string $name): string {
-    Civi::log()->debug("Looking up Square subscription plan: {$name}");
+   // Civi::log()->debug("Looking up Square subscription plan: {$name}");
     // Cache via Civi setting
     $cache = Civi::settings()->get('org_square_plan_cache') ?? [];
 
@@ -2110,7 +2125,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
         ],
       ],
     ];
-    Civi::log()->debug("Creating Square subscription plan: {$name}");
+   // Civi::log()->debug("Creating Square subscription plan: {$name}");
     $resp = $this->squareRequest('POST', '/v2/catalog/object', $body);
 
     $planId = $resp['catalog_object']['id'] ?? NULL;
@@ -2327,4 +2342,27 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
 
    // Civi::log()->debug("Square syncSubscriptionCancellationFromSquare(): marked recurring contribution {$recurId} as cancelled for subscription {$squareSubscriptionId}");
   }
+
+
+  /**
+   * Override CRM_Core_Payment function
+   *
+   * @return array
+   */
+  public function getPaymentFormFields(): array {
+    return [];
+  }
+
+  /**
+   * Return an array of all the details about the fields potentially required for payment fields.
+   *
+   * Only those determined by getPaymentFormFields will actually be assigned to the form
+   *
+   * @return array
+   *   field metadata
+   */
+  public function getPaymentFormFieldsMetadata(): array {
+    return [];
+  }
+
 }
