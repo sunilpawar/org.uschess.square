@@ -347,7 +347,7 @@ function org_uschess_square_civicrm_post($op, $objectName, $objectId, &$objectRe
         try {
           $mode = !empty($processor['is_test']) ? 'test' : 'live';
           $squareProcessor = new CRM_Core_Payment_Square($mode, $processor);
-          $squareProcessor->cancelSubscription($recur['processor_id']);
+          $squareProcessor->cancelSquareSubscription($recur['processor_id']);
           CRM_Core_Error::debug_log_message(sprintf(
             'Square: Cancelled subscription %s for recurring contribution #%d',
             $recur['processor_id'],

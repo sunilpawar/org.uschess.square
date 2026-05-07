@@ -5,6 +5,9 @@ use Civi\Api4\ContributionRecur;
 use Square\SquareClient;
 use Square\Customers\Requests\ListCustomersRequest;
 use Square\Environments;
+use Civi\Payment\Exception\PaymentProcessorException;
+use Civi\Api4\PaymentprocessorWebhook;
+use Civi\Payment\PropertyBag;
 
 require_once E::path() . '/vendor/autoload.php';
 /**
@@ -942,9 +945,12 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     if (!$token) {
       throw new CRM_Core_Exception('Missing Square card token for recurring payments.');
     }
-
+    // Determine amount and currency.
+    $amount = $params['amount'] ?? $params['total_amount'] ?? NULL;
+    if (!$amount) {
+      throw new \CRM_Core_Exception('Missing contribution amount.');
+    }
     $params['square_payment_token'] = $token;
-
     // 2. Ensure we have a valid Recurring Contribution ID from CiviCRM.
     $recurId = $params['contributionRecurID'] ?? NULL;
     if (!$recurId) {
@@ -954,7 +960,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     // 3. Ensure customer exists / or create one
     $customerId = $this->ensureSquareCustomer($params);
     if ($this->findSquareCustomerById($customerId)) {
-      // Civi::log()->debug("Square doRecurPayment: Found existing Square customer ID {$customerId} for CiviCRM recur ID {$recurId}");
+      Civi::log()->debug("Square doRecurPayment: Found existing Square customer ID {$customerId} for CiviCRM recur ID {$recurId}");
       $this->updateSquareCustomerDetails($customerId, $params);
     }
     else {
@@ -967,8 +973,10 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     }
     else {
       // If using 'square_payment_token', we assume it's already a card on file ID.
-      $cardId = $token;
+      //$cardId = $token;
+      $cardId = $this->createCardOnFile($customerId, $token);
     }
+    Civi::log()->debug("Square doRecurPayment: Using card ID {$cardId} for customer ID {$customerId} and CiviCRM recur ID {$recurId}");
 
     // 5. Determine plan ID
     $planVariationId = $this->getPlanVariationIdForParams($params);
@@ -979,7 +987,8 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     $startDate = (new DateTime('tomorrow'))->format('Y-m-d');
 
     // 7. Generate idempotency key tied to the recurring record so re-posts don't duplicate.
-    $idempotencyKey = "recur_{$recurId}_" . md5($customerId . $cardId . microtime(TRUE));
+    $idempotencyKey = "rc_{$recurId}_" . md5($customerId . $cardId .
+        microtime(TRUE));
     $source = [
       'contact_id' => (string) ($params['contactID'] ?? $params['contact_id'] ?? ''),
       'recur_id' => (string) $recurId,
@@ -1001,10 +1010,8 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
         'name' => $note,
       ],
     ];
-
     // 9. Send subscription create request
     $resp = $this->squareRequest('POST', '/v2/subscriptions', $body);
-
     if (empty($resp['subscription']['id'])) {
       throw new CRM_Core_Exception('Failed to create Square subscription.');
     }
@@ -1020,10 +1027,12 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     $initialPaymentNeeded = !empty($params['send_receipt']) || !empty($params['is_recur']);
     
     if ($initialPaymentNeeded) {
+      $amountCents = (int) round(((float) $amount) * 100);
+      $currency = $params['currency'] ?? $params['currencyID'] ?? 'USD';
       try {
         // Make an initial one-time payment for the first billing cycle
         $initialPaymentBody = [
-          'idempotency_key' => 'initial_' . $idempotencyKey,
+          'idempotency_key' => 'init_' . $idempotencyKey,
           'source_id' => $cardId,
           'amount_money' => [
             'amount' => $amountCents,
@@ -1033,10 +1042,23 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
           'customer_id' => $customerId,
           'reference_id' => (string) $recurId,
         ];
-
         $paymentResp = $this->squareRequest('POST', '/v2/payments', $initialPaymentBody);
         if (!empty($paymentResp['payment']['id'])) {
-
+          $transactionId = $paymentResp['payment']['id'];
+          $status = $paymentResp['payment']['status'] ?? 'UNKNOWN';
+          ContributionRecur::update(FALSE)
+            ->addWhere('id', '=', $recurId)
+            ->addValue('processor_id', $subscriptionId)
+            ->addValue('trxn_id', $subscriptionId)
+            ->addValue('contribution_status_id', 5) // Pending
+            ->execute();
+          Civi::log()->debug("Square initial payment for subscription {$subscriptionId} created with transaction ID {$transactionId} and status {$status}");
+          return [
+            'payment_status_id' => 1,               // Pending
+            'contribution_status_id' => 1,          // Pending
+            'trxn_id' => $transactionId,
+            'subscription_id' => $subscriptionId,
+          ];
         }
       }
       catch (Exception $e) {
@@ -1198,7 +1220,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     }
 
     $decoded = json_decode($raw, TRUE);
-   // Civi::log()->debug('Square squareRequest: Decoded response=' . json_encode($decoded, JSON_UNESCAPED_SLASHES));
+    // Civi::log()->debug('Square squareRequest: Decoded response=' . json_encode($decoded, JSON_UNESCAPED_SLASHES));
     
     if ($decoded === NULL) {
       $msg = 'Failed to decode Square API response JSON.';
@@ -1711,20 +1733,61 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
   }
 
   /**
-   * Cancel a Square subscription.
+   * Cancel a recurring contribution at Square.
    *
-   * You would typically call this from a hook when a recurring
-   * contribution is cancelled in CiviCRM.
+   * Overrides CRM_Core_Payment::doCancelRecurring() so CiviCRM core calls this
+   * directly and never falls back to the legacy cancelSubscription() path (which
+   * used an incompatible two-argument signature causing a TypeError).
    *
-   * @param string $subscriptionId
+   * @param \Civi\Payment\PropertyBag $propertyBag
    *
-   * @throws \CRM_Core_Exception
+   * @return array
+   * @throws \Civi\Payment\Exception\PaymentProcessorException
    */
-  public function cancelSubscription($subscriptionId) {
-    if (empty($subscriptionId)) {
-      throw new CRM_Core_Exception('Missing subscription ID to cancel.');
+  public function doCancelRecurring(PropertyBag $propertyBag): array {
+    if (!$propertyBag->has('isNotifyProcessorOnCancelRecur')) {
+      $propertyBag->setIsNotifyProcessorOnCancelRecur(TRUE);
     }
 
+    if (!$propertyBag->getIsNotifyProcessorOnCancelRecur()) {
+      return ['message' => E::ts('Successfully cancelled the subscription in CiviCRM ONLY.')];
+    }
+
+    if (!$propertyBag->has('recurProcessorID')) {
+      $errorMessage = E::ts('The recurring contribution cannot be cancelled (no Square subscription ID found).');
+      \Civi::log('square')->error($errorMessage);
+      throw new PaymentProcessorException($errorMessage);
+    }
+
+    try {
+      $this->cancelSquareSubscription($propertyBag->getRecurProcessorID());
+    }
+    catch (PaymentProcessorException $e) {
+      throw $e;
+    }
+    catch (\Exception $e) {
+      $errorMessage = E::ts('Failed to cancel the Square subscription: ') . $e->getMessage();
+      \Civi::log('square')->error($errorMessage);
+      throw new PaymentProcessorException($errorMessage, 0, $e);
+    }
+
+    return ['message' => E::ts('Successfully cancelled the Square subscription.')];
+  }
+
+  /**
+   * Cancel a Square subscription by its processor ID.
+   *
+   * Low-level helper used by doCancelRecurring() and by the civicrm_post hook.
+   * Makes the Square API call directly without PropertyBag logic.
+   *
+   * @param string $subscriptionId  Square subscription ID (e.g. "SUB_xxx").
+   *
+   * @throws \Civi\Payment\Exception\PaymentProcessorException
+   */
+  public function cancelSquareSubscription(string $subscriptionId): void {
+    if (empty($subscriptionId)) {
+      throw new PaymentProcessorException(E::ts('Cannot cancel Square subscription: empty subscription ID.'));
+    }
     $this->squareRequest('POST', "/v2/subscriptions/{$subscriptionId}/cancel", []);
   }
 
@@ -1843,6 +1906,31 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
   public function supportsBackOffice() {
     // You can change this to TRUE if you later support card entry in admin UI.
     return FALSE;
+  }
+
+  /**
+   * Does this processor support cancelling recurring contributions through code.
+   *
+   * If the processor returns true it must be possible to take action from within CiviCRM
+   * that will result in no further payments being processed.
+   *
+   * @return bool
+   */
+  protected function supportsCancelRecurring() {
+    return TRUE;
+  }
+
+  /**
+   * Does the processor support the user having a choice as to whether to cancel the recurring with the processor?
+   *
+   * If this returns TRUE then there will be an option to send a cancellation request in the cancellation form.
+   *
+   * This would normally be false for processors where CiviCRM maintains the schedule.
+   *
+   * @return bool
+   */
+  protected function supportsCancelRecurringNotifyOptional() {
+    return TRUE;
   }
 
   /**
