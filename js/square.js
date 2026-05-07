@@ -342,6 +342,7 @@
     name: 'square',
     card: null,
     sdkPromise: null,
+    initializing: false,
 
     debugging: function(msg) {
       CRM.squarePayment.debugging(script.name, msg);
@@ -386,10 +387,14 @@
 
     notScriptProcessor: function() {
       script.debugging('payment processor is not Square, cleaning up');
+      script.initializing = false;
       if (script.card) {
         try { script.card.destroy(); } catch(e) {}
         script.card = null;
-        script.sdkPromise = null;
+      }
+      var containerEl = document.getElementById('square-card-container');
+      if (containerEl) {
+        containerEl.innerHTML = '';
       }
       if (typeof CRM.vars !== 'undefined') {
         delete CRM.vars.orgUschessSquare;
@@ -400,6 +405,10 @@
     },
 
     checkAndLoad: function() {
+      if (script.initializing) {
+        script.debugging('init already in progress, skipping');
+        return;
+      }
       if (typeof CRM.vars === 'undefined' || typeof CRM.vars.orgUschessSquare === 'undefined') {
         script.debugging('CRM.vars.orgUschessSquare not defined');
         return;
@@ -409,6 +418,23 @@
         script.debugging('Square config missing applicationId or locationId');
         return;
       }
+
+      script.initializing = true;
+
+      // Destroy any previously mounted card instance before creating a new one.
+      if (script.card) {
+        try { script.card.destroy(); } catch(e) {}
+        script.card = null;
+      }
+
+      // Empty the container so Square always starts with a clean slate.
+      // This prevents the "card appears twice" issue when switching processors.
+      var containerEl = document.getElementById('square-card-container');
+      if (containerEl) {
+        containerEl.innerHTML = '';
+        containerEl.style.display = 'none';
+      }
+
       script.ensureSdkLoaded(cfg.isSandbox)
         .then(function() {
           if (!window.Square || !window.Square.payments) {
@@ -421,11 +447,13 @@
           });
         })
         .then(function() {
+          script.initializing = false;
           var container = document.getElementById('square-card-container');
           if (container) container.style.display = 'block';
           script.doAfterElementsHaveLoaded();
         })
         .catch(function(err) {
+          script.initializing = false;
           script.debugging('Square card init failed: ' + (err && err.message || err));
           var errEl = document.getElementById('square-card-errors');
           if (errEl) {
@@ -682,13 +710,11 @@
 
     var cardContainer = document.getElementById('square-card-container');
     if (cardContainer) {
-      if (!cardContainer.children.length) {
-        CRM.squarePayment.debugging(script.name, 'mounting Square card element');
-        script.checkAndLoad();
-      }
-      else {
-        CRM.squarePayment.debugging(script.name, 'card element already mounted');
-      }
+      // Always call checkAndLoad — it clears the container and destroys any
+      // previous card instance before mounting a fresh one. This prevents the
+      // "card appears twice" issue when switching processors and coming back.
+      CRM.squarePayment.debugging(script.name, 'mounting Square card element');
+      script.checkAndLoad();
     }
     else {
       // No card container → this form uses a different processor
