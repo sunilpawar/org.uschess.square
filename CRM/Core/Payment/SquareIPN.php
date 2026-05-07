@@ -5,6 +5,8 @@
  *
  * Processes Square webhook events and syncs them into CiviCRM.
  *
+ * Entry point: onReceiveWebhook() — called from CRM_Core_Payment_Square::handlePaymentNotification().
+ *
  * Handles:
  *   subscription.created, subscription.updated, subscription.canceled
  *   invoice.created, invoice.payment_made, invoice.payment_failed
@@ -16,6 +18,16 @@ class CRM_Core_Payment_SquareIPN {
    * @var CRM_Core_Payment_Square
    */
   protected $_paymentProcessor;
+
+  /**
+   * @var string|null Event ID of the webhook being processed.
+   */
+  protected $event_id = NULL;
+
+  /**
+   * @var string The event type currently being processed.
+   */
+  protected $event_type = '';
 
   /**
    * @var string|null Square subscription ID extracted from the current event.
@@ -38,20 +50,73 @@ class CRM_Core_Payment_SquareIPN {
   protected $payment_id = NULL;
 
   /**
-   * @var string The event type currently being processed.
-   */
-  protected $event_type = '';
-
-  /**
-   * @var array The full decoded webhook payload.
-   */
-  protected $payload = [];
-
-  /**
    * @param CRM_Core_Payment_Square $processor
    */
   public function __construct($processor) {
     $this->_paymentProcessor = $processor;
+  }
+
+  /**
+   * Square event types this class handles.
+   *
+   * @return string[]
+   */
+  public static function getSupportedEventTypes(): array {
+    return [
+      'subscription.created',
+      'subscription.updated',
+      'subscription.canceled',
+      'invoice.created',
+      'invoice.payment_made',
+      'invoice.payment_failed',
+      'payment.updated',
+      'refund.created',
+    ];
+  }
+
+  /**
+   * Main entry point — called from Square::handlePaymentNotification().
+   *
+   * Handles deduplication, logging, and delegates to processWebhookEvent().
+   *
+   * @param array $payload Decoded JSON webhook payload.
+   * @return bool TRUE on success.
+   */
+  public function onReceiveWebhook(array $payload): bool {
+    $eventId   = $payload['event_id'] ?? NULL;
+    $eventType = $payload['type'] ?? 'unknown';
+
+    $this->event_id   = $eventId;
+    $this->event_type = $eventType;
+
+    // Ignore event types we do not handle (return 200 so Square does not retry).
+    if (!in_array($eventType, self::getSupportedEventTypes(), TRUE)) {
+      Civi::log()->debug("Square IPN: ignoring unsupported event type '{$eventType}'.");
+      return TRUE;
+    }
+
+    // Deduplication — skip if already processed.
+    if ($eventId && $this->isDuplicateEvent($eventId)) {
+      $this->logWebhookDelivery($eventId, $eventType, 'Duplicate event skipped', 200);
+      return TRUE;
+    }
+
+    // Mark as processed before routing to prevent parallel double-processing.
+    if ($eventId) {
+      $this->markEventProcessed($eventId);
+    }
+
+    try {
+      $this->processWebhookEvent($payload, $eventType);
+      $this->logWebhookDelivery($eventId, $eventType, 'Successfully processed', 200);
+      return TRUE;
+    }
+    catch (Exception $e) {
+      $msg = 'Square IPN error (' . $eventType . '): ' . $e->getMessage();
+      Civi::log()->error($msg);
+      $this->logWebhookDelivery($eventId, $eventType, $msg, 500);
+      return FALSE;
+    }
   }
 
   /**
@@ -61,10 +126,9 @@ class CRM_Core_Payment_SquareIPN {
    * @param string $eventType Square event type string.
    */
   public function setInputParameters(array $payload, string $eventType): void {
-    $this->payload = $payload;
-    $this->event_type = $eventType;
-
     $obj = $payload['data']['object'] ?? [];
+
+    $this->event_type = $eventType;
 
     $this->subscription_id = $obj['subscription']['id']
       ?? $obj['invoice']['subscription_id']
@@ -87,7 +151,6 @@ class CRM_Core_Payment_SquareIPN {
    *
    * @param array $payload Decoded JSON webhook payload.
    * @param string $eventType Square event type string.
-   *
    * @return bool TRUE on success.
    */
   public function processWebhookEvent(array $payload, string $eventType): bool {
@@ -154,7 +217,7 @@ class CRM_Core_Payment_SquareIPN {
         break;
 
       default:
-        Civi::log()->debug("Square IPN: Unhandled event type '{$eventType}'");
+        Civi::log()->debug("Square IPN: unhandled event type '{$eventType}'");
         break;
     }
 
@@ -171,16 +234,16 @@ class CRM_Core_Payment_SquareIPN {
    * @param array $invoice Invoice object from Square webhook payload.
    */
   protected function handleInvoiceCreated(array $invoice): void {
-    $invoiceId = $invoice['id'] ?? NULL;
+    $invoiceId      = $invoice['id'] ?? NULL;
     $subscriptionId = $invoice['subscription_id'] ?? NULL;
-    $status = strtoupper($invoice['status'] ?? '');
+    $status         = strtoupper($invoice['status'] ?? '');
 
     if (!$invoiceId || !$subscriptionId) {
       Civi::log()->debug('Square IPN: invoice.created missing invoice ID or subscription_id.');
       return;
     }
 
-    // Skip invoices that are already paid or in payment — invoice.payment_made handles those.
+    // Skip invoices that are already paid — invoice.payment_made handles those.
     if (in_array($status, ['PAID', 'PAYMENT_PENDING'], TRUE)) {
       Civi::log()->debug("Square IPN: invoice.created skipped (status={$status}).");
       return;
@@ -208,8 +271,8 @@ class CRM_Core_Payment_SquareIPN {
       return;
     }
 
-    $money = $invoice['payment_requests'][0]['computed_amount_money'] ?? NULL;
-    $amount = $money ? (((float) $money['amount']) / 100) : 0.0;
+    $money    = $invoice['payment_requests'][0]['computed_amount_money'] ?? NULL;
+    $amount   = $money ? (((float) $money['amount']) / 100) : 0.0;
     $currency = $money['currency'] ?? $recur['currency'] ?? 'USD';
 
     \Civi\Api4\Contribution::create(FALSE)
@@ -232,7 +295,7 @@ class CRM_Core_Payment_SquareIPN {
    * @param array $invoice Invoice object from Square webhook payload.
    */
   protected function handleInvoicePaymentFailed(array $invoice): void {
-    $invoiceId = $invoice['id'] ?? NULL;
+    $invoiceId      = $invoice['id'] ?? NULL;
     $subscriptionId = $invoice['subscription_id'] ?? NULL;
 
     if (!$invoiceId) {
@@ -273,8 +336,8 @@ class CRM_Core_Payment_SquareIPN {
       return;
     }
 
-    $money = $invoice['payment_requests'][0]['computed_amount_money'] ?? NULL;
-    $amount = $money ? (((float) $money['amount']) / 100) : 0.0;
+    $money    = $invoice['payment_requests'][0]['computed_amount_money'] ?? NULL;
+    $amount   = $money ? (((float) $money['amount']) / 100) : 0.0;
     $currency = $money['currency'] ?? $recur['currency'] ?? 'USD';
 
     \Civi\Api4\Contribution::create(FALSE)
@@ -289,6 +352,69 @@ class CRM_Core_Payment_SquareIPN {
       ->execute();
 
     Civi::log()->debug("Square IPN: Created Failed contribution for invoice {$invoiceId}.");
+  }
+
+  /**
+   * Check whether this event ID has already been processed (deduplication).
+   *
+   * @param string $eventId
+   * @return bool
+   */
+  protected function isDuplicateEvent(string $eventId): bool {
+    try {
+      $count = CRM_Core_DAO::singleValueQuery(
+        'SELECT COUNT(*) FROM civicrm_square_webhook_event WHERE event_id = %1',
+        [1 => [$eventId, 'String']]
+      );
+      return (int) $count > 0;
+    }
+    catch (Exception $e) {
+      Civi::log()->debug('Square IPN: error checking duplicate event: ' . $e->getMessage());
+      return FALSE;
+    }
+  }
+
+  /**
+   * Record this event ID as processed to prevent replay.
+   *
+   * @param string $eventId
+   */
+  protected function markEventProcessed(string $eventId): void {
+    try {
+      CRM_Core_DAO::executeQuery(
+        'INSERT IGNORE INTO civicrm_square_webhook_event (event_id, processed_at) VALUES (%1, NOW())',
+        [1 => [$eventId, 'String']]
+      );
+    }
+    catch (Exception $e) {
+      Civi::log()->debug('Square IPN: error marking event processed: ' . $e->getMessage());
+    }
+  }
+
+  /**
+   * Log a webhook delivery attempt for debugging and auditing.
+   *
+   * @param string|null $eventId
+   * @param string $eventType
+   * @param string $message
+   * @param int $httpStatus
+   */
+  protected function logWebhookDelivery(?string $eventId, string $eventType, string $message, int $httpStatus): void {
+    try {
+      CRM_Core_DAO::executeQuery(
+        'INSERT INTO civicrm_square_webhook_delivery (event_id, event_type, message, http_status, delivered_at)
+         VALUES (%1, %2, %3, %4, NOW())',
+        [
+          1 => [$eventId ?? '', 'String'],
+          2 => [$eventType,     'String'],
+          3 => [$message,       'String'],
+          4 => [$httpStatus,    'Integer'],
+        ]
+      );
+    }
+    catch (Exception $e) {
+      Civi::log()->debug("Square IPN [{$eventType}]: {$message} (HTTP {$httpStatus})");
+    }
   }
 
 }

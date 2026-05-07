@@ -2402,11 +2402,73 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
   /**
    * Process incoming payment notification (IPN).
    *
-   * @throws \CRM_Core_Exception
-   * @throws \Stripe\Exception\UnknownApiErrorException
+   * Called by CiviCRM core when it receives a POST to:
+   *   civicrm/payment/ipn/{processor_id}
+   *
+   * Validates the Square webhook signature, then delegates event processing
+   * to CRM_Core_Payment_SquareIPN.
    */
   public function handlePaymentNotification() {
+    http_response_code(200);
+    $rawData = file_get_contents('php://input');
 
+    if (!$this->validateWebhookSignature($rawData, getallheaders())) {
+      Civi::log()->error('Square IPN: webhook signature validation failed.');
+      http_response_code(401);
+      exit();
+    }
+
+    $payload = json_decode($rawData, TRUE);
+    if (empty($payload)) {
+      Civi::log()->error('Square IPN: invalid JSON body received.');
+      http_response_code(400);
+      exit();
+    }
+
+    $ipn = new CRM_Core_Payment_SquareIPN($this);
+    if (!$ipn->onReceiveWebhook($payload)) {
+      http_response_code(500);
+    }
+  }
+
+  /**
+   * Validate the Square webhook HMAC-SHA256 signature.
+   *
+   * Square signs webhooks as:
+   *   base64( HMAC-SHA256( notification_url + raw_body, signature_key ) )
+   *
+   * @param string $rawData Raw request body.
+   * @param array $headers HTTP headers from getallheaders().
+   * @return bool
+   */
+  protected function validateWebhookSignature(string $rawData, array $headers): bool {
+    $key = $this->getWebhookSignatureKey();
+    if (!$key) {
+      Civi::log()->error('Square IPN: webhook signature key not configured (check "Subject" field on payment processor).');
+      return FALSE;
+    }
+
+    // Header keys are case-insensitive; normalise to lowercase.
+    $normalised = [];
+    foreach ($headers as $k => $v) {
+      $normalised[strtolower($k)] = $v;
+    }
+
+    $provided = $normalised['x-square-signature'] ?? NULL;
+    if (!$provided) {
+      Civi::log()->error('Square IPN: X-Square-Signature header missing.');
+      return FALSE;
+    }
+
+    $notifyUrl = $this->getNotifyUrl();
+    $expected  = base64_encode(hash_hmac('sha256', $notifyUrl . $rawData, $key, TRUE));
+
+    if (!hash_equals($expected, $provided)) {
+      Civi::log()->error("Square IPN: signature mismatch. url={$notifyUrl}");
+      return FALSE;
+    }
+
+    return TRUE;
   }
 
 }

@@ -1,52 +1,5 @@
 <?php
 
-use CRM_Core_Form;
-use CRM_Utils_System;
-use CRM_Core_Error;
-use CRM_UschessSquare_Webhook;
-use CRM_Core_Payment_Square;
-use Exception;
-
-/**
- * Implementation of hook_civicrm_pageRun().
- *
- * This creates a public-facing URL:
- *   /civicrm/square/webhook
- *
- * Square will POST webhook events to that URL.
- */
-function org_uschess_square_civicrm_pageRun(&$page) {
-  $path = trim(CRM_Utils_System::currentPath(), '/');
-
-  if ($path === 'civicrm/square/webhook') {
-
-    // Load the Square payment processor instance.
-    try {
-      $pp = civicrm_api3('PaymentProcessor', 'getsingle', [
-        'payment_processor_type_id:name' => 'Square',
-      ]);
-    }
-    catch (Exception $e) {
-      CRM_Core_Error::debug_log_message("Square Webhook: cannot load payment processor: " . $e->getMessage());
-      CRM_Utils_System::civiExit();
-    }
-
-    // Determine mode from processor config
-    $mode = !empty($pp['is_test']) ? 'test' : 'live';
-
-    // Instantiate processor class with correct mode
-    $processor = new CRM_Core_Payment_Square($mode, $pp);
-
-    // Create webhook handler
-    $handler = new CRM_UschessSquare_Webhook($processor);
-
-    // Process webhook
-    $handler->handle();
-
-    CRM_Utils_System::civiExit();
-  }
-}
-
 /**
  * Implementation of hook_civicrm_config().
  * Required to autoload CRM/UschessSquare classes.
