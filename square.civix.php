@@ -8,7 +8,7 @@
  */
 class CRM_Square_ExtensionUtil {
   const SHORT_NAME = 'square';
-  const LONG_NAME = 'com.uschess.square';
+  const LONG_NAME = 'org.uschess.square';
   const CLASS_PREFIX = 'CRM_Square';
 
   /**

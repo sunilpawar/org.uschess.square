@@ -181,6 +181,78 @@ function square_civicrm_pageRun(&$page): void {
 }
 
 /**
+ * Implements hook_civicrm_buildForm().
+ * Inject Square Web Payments SDK + JS + card container into contribution forms.
+ */
+function square_civicrm_buildForm($formName, &$form): void {
+  // Only act on contribution and event registration forms.
+  if (!in_array($formName, ['CRM_Contribute_Form_Contribution', 'CRM_Event_Form_Registration'], TRUE)) {
+    return;
+  }
+  return;
+  // Get payment processor currently in use.
+  $processor = $form->getVar('_paymentProcessor');
+  if (empty($processor)) {
+    return;
+  }
+
+  // Only if this is the Square processor.
+  $className = $processor['class_name'] ?? '';
+  if ($className !== 'Payment_Square' && $className !== 'CRM_Core_Payment_Square') {
+    return;
+  }
+
+  // Hidden field where the JS will store the card token.
+  if (!$form->elementExists('square_payment_token')) {
+    $form->add('hidden', 'square_payment_token', '', ['id' => 'square_payment_token']);
+  }
+
+  // Inject the container where Square will mount the card fields + error box.
+  $markup = '
+    <div id="square-card-container"></div>
+    <div id="square-card-errors" class="messages error" style="display:none"></div>
+  ';
+
+  // Attach this to the billing block region so it appears in the right place.
+  \CRM_Core_Region::instance('billing-block')->add([
+    'markup' => $markup,
+  ]);
+
+  // Decide sandbox vs live SDK URL.
+  $isSandbox = !empty($processor['is_test']);
+  $sdkUrl = $isSandbox
+    ? 'https://sandbox.web.squarecdn.com/v1/square.js'
+    : 'https://web.squarecdn.com/v1/square.js';
+
+  $resources = \CRM_Core_Resources::singleton();
+
+  // Load Square's JS SDK.
+  $resources->addScriptUrl($sdkUrl, 0, 'html-header');
+
+  // Load our own integration JS from the extension.
+  $resources->addScriptFile('org.uschess.square', 'js/square.js', 10, 'html-header');
+
+  // Pass settings to JS via window variables (more reliable than CRM.vars)
+  $inlineScript = "
+    window.squareApplicationId = '" . addslashes($processor['user_name'] ?? '') . "';
+    window.squareLocationId = '" . addslashes($processor['signature'] ?? ($processor['password'] ?? '')) . "';
+    window.squareIsSandbox = " . ($isSandbox ? 'true' : 'false') . ";
+  ";
+  $resources->addScript($inlineScript, 'html-header');
+
+  // Also pass settings to JS via CRM.vars for compatibility.
+  $settings = [
+    'applicationId' => $processor['user_name'] ?? '',
+    'locationId'    => $processor['signature'] ?? ($processor['password'] ?? ''),
+    'isSandbox'     => $isSandbox,
+  ];
+
+  $resources->addSetting([
+    'orgUschessSquare' => $settings,
+  ]);
+}
+
+/**
  * Implements hook_civicrm_managed().
  * Ensure custom fields (Square Customer ID) and payment processor type are created.
  */

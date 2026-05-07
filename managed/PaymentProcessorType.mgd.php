@@ -5,6 +5,8 @@ return [
     'name'   => 'SquarePaymentProcessor',
     'entity' => 'payment_processor_type',
     'module' => 'org.uschess.square',
+    'update' => 'always',
+    'cleanup' => 'never',
     'params' => [
       'version'     => 3,
       'title'       => 'Square',
@@ -37,7 +39,7 @@ return [
 
       // On-site card entry (we use Web Payments SDK)
       // 1 = onsite, 4 = offsite/redirect
-      'billing_mode' => 4,
+      'billing_mode' => 1,
 
       // 1 = credit card
       'payment_type' => 1,
