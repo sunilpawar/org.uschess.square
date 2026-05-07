@@ -2399,4 +2399,14 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     return [];
   }
 
+  /**
+   * Process incoming payment notification (IPN).
+   *
+   * @throws \CRM_Core_Exception
+   * @throws \Stripe\Exception\UnknownApiErrorException
+   */
+  public function handlePaymentNotification() {
+
+  }
+
 }

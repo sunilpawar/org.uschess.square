@@ -75,7 +75,7 @@ class CRM_UschessSquare_Webhook {
   }
 
   /**
-   * Route webhook event to appropriate handler.
+   * Route webhook event to the SquareIPN processor.
    *
    * @param array $payload
    * @param string $eventType
@@ -83,98 +83,13 @@ class CRM_UschessSquare_Webhook {
    */
   protected function routeEvent(array $payload, $eventType, $eventId = NULL) {
     try {
-      switch ($eventType) {
-
-        case 'payment.created':
-        case 'payment.updated':
-          $payment = $payload['data']['object']['payment'] ?? [];
-          if (!empty($payment)) {
-            $this->processor->syncPaymentFromSquare($payment);
-          }
-          break;
-
-        case 'payment.refunded':
-          $refund = $payload['data']['object']['refund'] ?? [];
-          if (!empty($refund)) {
-            $this->processor->syncRefundFromSquare($refund);
-          }
-          break;
-
-        case 'subscription.created':
-        case 'subscription.updated':
-          $subscription = $payload['data']['object']['subscription'] ?? [];
-          $subscriptionId = $subscription['id'] ?? NULL;
-          if ($subscriptionId) {
-            $this->processor->syncSubscriptionFromSquare($subscriptionId);
-          }
-          break;
-
-        case 'subscription.canceled':
-        case 'subscription.deleted':
-          $subscription = $payload['data']['object']['subscription'] ?? [];
-          $subscriptionId = $subscription['id'] ?? NULL;
-          if ($subscriptionId) {
-            $this->processor->syncSubscriptionCancellationFromSquare($subscriptionId);
-          }
-          break;
-
-        case 'invoice.paid':
-        case 'invoice.payment_failed':
-          $invoice = $payload['data']['object']['invoice'] ?? [];
-          if (!empty($invoice)) {
-            $this->processor->syncInvoiceFromSquare($invoice);
-          }
-          break;
-
-        case 'payment.failed':
-          $payment = $payload['data']['object']['payment'] ?? [];
-          if (!empty($payment)) {
-            $this->handlePaymentFailed($payment);
-          }
-          break;
-
-        default:
-          Civi::log()->debug("Square Webhook: Unhandled event type {$eventType}");
-          break;
-      }
+      $ipn = new CRM_Core_Payment_SquareIPN($this->processor);
+      $ipn->processWebhookEvent($payload, $eventType);
     }
     catch (Exception $e) {
       Civi::log()->error("Square Webhook: Error routing event {$eventType}: " . $e->getMessage());
       throw $e;
     }
-  }
-
-  /**
-   * Handle payment.failed webhook event.
-   *
-   * @param array $payment
-   */
-  protected function handlePaymentFailed(array $payment) {
-    $paymentId = $payment['id'] ?? NULL;
-    if (!$paymentId) {
-      Civi::log()->debug('Square webhook: payment.failed missing payment ID.');
-      return;
-    }
-
-    // Find contribution by transaction ID
-    $contribution = \Civi\Api4\Contribution::get(FALSE)
-      ->addSelect('id')
-      ->addWhere('trxn_id', '=', $paymentId)
-      ->execute()
-      ->first();
-
-    if (!$contribution) {
-      Civi::log()->debug("Square webhook: No contribution found for failed payment {$paymentId}");
-      return;
-    }
-
-    // Update status to Failed (4)
-    \Civi\Api4\Contribution::update(FALSE)
-      ->addWhere('id', '=', $contribution['id'])
-      ->addValue('contribution_status_id', 4) // Failed
-      ->execute();
-
-    Civi::log()->debug("Square webhook: Marked contribution {$contribution['id']} as failed for payment {$paymentId}");
   }
 
   /**
