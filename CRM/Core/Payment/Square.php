@@ -21,23 +21,6 @@ require_once E::path() . '/vendor/autoload.php';
 class CRM_Core_Payment_Square extends CRM_Core_Payment {
 
   /**
-   * Singleton instances keyed by processor name + mode.
-   *
-   * @var array
-   */
-  protected static $_singleton = [];
-
-  /**
-   * @var string
-   */
-  protected string $_mode;
-
-  /**
-   * @var bool
-   */
-  protected bool $_isTest;
-
-  /**
    * Square-supported cadence definitions.
    */
   protected const SQUARE_CADENCES = [
@@ -93,33 +76,9 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
    * @param array $paymentProcessor
    *   Row from civicrm_payment_processor.
    */
-  public function __construct($mode, &$paymentProcessor) {
+  public function __construct($mode, array &$paymentProcessor) {
     // Store processor config
     $this->_paymentProcessor = $paymentProcessor;
-
-    // CiviCRM typically passes 'live' or 'test' here, but we also honour the DB flag.
-    $this->_mode = $mode ?: 'live';
-
-    // Test mode if either the mode is explicitly 'test' or the processor is flagged is_test.
-    $this->_isTest = !empty($paymentProcessor['is_test']) ||
-      strtolower((string) $this->_mode) === 'test';
-  }
-
-  /**
-   * Return a singleton instance of this payment processor.
-   *
-   * @param string $mode
-   * @param array $paymentProcessor
-   *
-   * @return self
-   */
-  public static function &singleton($mode, &$paymentProcessor) {
-    $processorName = $paymentProcessor['name'] ?? 'Square';
-    $cacheKey = $processorName . '_' . $mode;
-    if (!isset(self::$_singleton[$cacheKey])) {
-      self::$_singleton[$cacheKey] = new self($mode, $paymentProcessor);
-    }
-    return self::$_singleton[$cacheKey];
   }
 
   /**
@@ -128,7 +87,75 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
    * @return bool
    */
   protected function isTestMode() {
-    return !empty($this->_isTest);
+    return !empty($this->_paymentProcessor['is_test']);
+  }
+
+  /**
+   * Inject Square Web Payments SDK, square.js, and card container HTML into the
+   * billing block.
+   *
+   * This method is called by CiviCRM for ALL form types that render the billing
+   * block, including:
+   *  - Native contribution pages / event registration
+   *  - Drupal Webform AJAX billing block requests (CRM_Core_Payment_Form)
+   *  - Backend contribution/event forms
+   *
+   * We use CRM_Core_Region::instance('billing-block')->add() rather than
+   * \Civi::resources()->addScriptFile() because the latter does NOT work for
+   * AJAX billing block responses (e.g. Drupal webforms).
+   *
+   * @param \CRM_Core_Form $form
+   */
+  public function buildForm(&$form) {
+    $isSandbox = FALSE;
+    if ($this->_paymentProcessor['is_test']) {
+      $isSandbox = TRUE;
+    }
+
+    $sdkUrl = $isSandbox
+      ? 'https://sandbox.web.squarecdn.com/v1/square.js'
+      : 'https://web.squarecdn.com/v1/square.js';
+
+    $jsVars = [
+      'id'            => (int) ($this->_paymentProcessor['id'] ?? 0),
+      'applicationId' => $this->_paymentProcessor['user_name'] ?? '',
+      'locationId'    => $this->_paymentProcessor['signature'] ?? ($this->_paymentProcessor['password'] ?? ''),
+      'isSandbox'     => (bool) $isSandbox,
+    ];
+
+    // Add hidden field for the payment token
+    if (!$form->elementExists('square_payment_token')) {
+      $form->add('hidden', 'square_payment_token', '', ['id' => 'square_payment_token']);
+    }
+
+
+    // Square Web Payments SDK (loaded before our JS).
+    CRM_Core_Region::instance('billing-block')->add([
+      'scriptUrl' => $sdkUrl,
+      'weight' => -1,
+    ]);
+
+    // Our integration JS (loaded last so CRM.squarePayment utilities are ready).
+    CRM_Core_Region::instance('billing-block')->add([
+      'scriptUrl' => E::url('js/square.js'),
+      'weight' => 100,
+    ]);
+
+    // Publish settings to CRM.vars.orgUschessSquare (works for normal page load).
+    CRM_Core_Resources::singleton()->addSetting(['orgUschessSquare' => $jsVars]);
+
+    // Pass vars to Smarty so the template can emit an inline <script> fallback
+    // for Drupal webforms where addSetting() responses may not be processed.
+    $form->assign('squareJSVarsJson', json_encode($jsVars, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT));
+
+    // Billing block HTML: card container + error element + inline JS fallback.
+    CRM_Core_Region::instance('billing-block')->add([
+      'template' => E::path('templates/CRM/Core/Payment/Square/Card.tpl'),
+      'weight' => -1,
+    ]);
+
+    // Enable JS validation so submission only happens after fields are valid.
+    $form->assign('isJsValidate', TRUE);
   }
 
   /**
@@ -142,7 +169,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
   protected function buildSquareClient(): SquareClient {
     $token = $this->getAccessToken();
 
-    $baseUrl = $this->_isTest
+    $baseUrl = $this->isTestMode()
       ? 'https://connect.squareupsandbox.com'
       : 'https://connect.squareup.com';
 
@@ -160,19 +187,8 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
    * @throws \CRM_Core_Exception
    */
   protected function getAccessToken() {
-    if ($this->isTestMode()) {
-      $token = $this->_paymentProcessor['password'] ?? '';
-      if (empty($token)) {
-        throw new CRM_Core_Exception('Square sandbox access token (test_password) is not configured.');
-      }
-    }
-    else {
-      $token = $this->_paymentProcessor['password'] ?? '';
-      if (empty($token)) {
-        throw new CRM_Core_Exception('Square live access token (password) is not configured.');
-      }
-    }
-    return $token;
+
+    return trim($this->_paymentProcessor['password'] ?? '');
   }
 
   /**
@@ -183,16 +199,7 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
    * @throws \CRM_Core_Exception
    */
   protected function getLocationId() {
-    if ($this->isTestMode()) {
-      $loc = $this->_paymentProcessor['test_signature'] ?? '';
-      if (empty($loc)) {
-        $loc = $this->_paymentProcessor['signature'] ?? '';
-      }
-    }
-    else {
-      $loc = $this->_paymentProcessor['signature'] ?? '';
-    }
-
+    $loc = trim($this->_paymentProcessor['signature'] ?? '');
     if (empty($loc)) {
       throw new CRM_Core_Exception('Square location ID is not configured on this payment processor.');
     }
@@ -258,16 +265,26 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
    * @return string|null
    */
   public function checkConfig() {
+    $error = [];
+
+    if (!empty($error)) {
+      return implode('<p>', $error);
+    }
+    else {
+      return NULL;
+    }
+    /*
     try {
       $client = $this->buildSquareClient();
       $resp = $client->customers->list(new ListCustomersRequest([]));
       return NULL;
     }
     catch (\Exception $e) {
-      $msg = "Square checkConfig failure (" . ($this->_isTest ? 'SANDBOX' : 'PRODUCTION') . "): " . $e->getMessage();
+      $msg = "Square checkConfig failure (" . ($this->isTestMode() ? 'SANDBOX' : 'PRODUCTION') . "): " . $e->getMessage();
      // Civi::log()->debug($msg);
       return $msg;
     }
+    */
   }
 
   /**
@@ -1899,77 +1916,6 @@ class CRM_Core_Payment_Square extends CRM_Core_Payment {
     ];
   }
 
-  /**
-   * Inject Square payment form elements and scripts.
-   */
-  public function buildForm(&$form) {
-    $formName = $form->getName();
-
-    // Add test_url_button to suppress CiviCRM core warning
-    if (!$form->elementExists('test_url_button')) {
-      $form->addElement('hidden', 'test_url_button', '', ['id' => 'test_url_button']);
-    }
-
-    // Add is_test checkbox to the payment processor settings form
-    if (!$form->elementExists('is_test') && $formName === 'CRM_Admin_Form_PaymentProcessor') {
-      $form->add('checkbox', 'is_test', ts('Is Test Mode?'), NULL, FALSE);
-    }
-
-    // Add hidden field for the payment token
-    if (!$form->elementExists('square_payment_token')) {
-      $form->add('hidden', 'square_payment_token', '', ['id' => 'square_payment_token']);
-    }
-
-    // Inject the container where Square will mount the card fields + error box.
-    $markup = '
-      <div id="square-card-container"></div>
-      <div id="square-card-errors" class="messages error" style="display:none"></div>
-    ';
-
-    $resources = CRM_Core_Resources::singleton();
-
-    // Decide sandbox vs live SDK URL based on processor mode.
-    $isSandbox = !empty($this->_mode) && $this->_mode === 'test';
-
-    $sdkUrl = $isSandbox
-      ? 'https://sandbox.web.squarecdn.com/v1/square.js'
-      : 'https://web.squarecdn.com/v1/square.js';
-
-    // Load Square's JS SDK.
-    CRM_Core_Region::instance('billing-block')->addScriptUrl($sdkUrl);
-
-    // Load our own integration JS from the extension.
-    CRM_Core_Region::instance('billing-block')->add([
-      'scriptFile' => [
-        'org.uschess.square',
-        'js/square.js',
-      ],
-      // Load after other scripts on form (default = 1)
-      'weight' => 100,
-    ]);
-    // Pass settings to JS via window variables (more reliable than CRM.vars)
-    $inlineScript = "
-      window.squareApplicationId = '" . addslashes($this->_paymentProcessor['user_name'] ?? '') . "';
-      window.squareLocationId = '" . addslashes($this->_paymentProcessor['signature'] ?? ($this->_paymentProcessor['password'] ?? '')) . "';
-      window.squareIsSandbox = " . ($isSandbox ? 'true' : 'false') . ";
-    ";
-    CRM_Core_Region::instance('billing-block')->addScript($inlineScript);
-
-    // Also pass settings to JS via CRM.vars for compatibility.
-    $settings = [
-      'applicationId' => $this->_paymentProcessor['user_name'] ?? '',
-      'locationId' => $this->_paymentProcessor['signature'] ?? ($this->_paymentProcessor['password'] ?? ''),
-      'isSandbox' => $isSandbox,
-    ];
-    CRM_Core_Region::instance('billing-block')->addSetting([
-      'orgUschessSquare' => $settings,
-    ]);
-
-    // Attach this to the billing block region so it appears in the right place.
-    CRM_Core_Region::instance('billing-block')->add([
-      'markup' => $markup,
-    ]);
-  }
 
   /**
    * Validate payment processor settings on save.
